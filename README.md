@@ -44,3 +44,13 @@ docker compose down
 # Bajar todo y borrar la base de datos
 docker compose down -v
 
+# Para montar en host
+
+docker_compose_prd/
+├── docker-compose.prod.yml    ← copiado del proyecto
+└── .env                       ← configura tus variables
+
+cd C:\Users\User\Desktop\docker_compose_prd
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+
