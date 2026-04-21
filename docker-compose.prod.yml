@@ -1,0 +1,51 @@
+version: '3.9'
+
+# Archivo de producción: NO buildea nada localmente.
+# Las imágenes ya fueron buildeadas y subidas a GHCR por GitHub Actions.
+# El servidor solo necesita este archivo y el .env para levantar todo.
+#
+# Uso:
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+
+services:
+
+  frontend:
+    image: ghcr.io/${GITHUB_USER}/${GITHUB_REPO}-frontend:latest
+    ports:
+      - "${FRONTEND_PORT}:80"
+    depends_on:
+      - backend
+    networks:
+      - frontend_net
+    restart: unless-stopped
+
+  backend:
+    image: ghcr.io/${GITHUB_USER}/${GITHUB_REPO}-backend:latest
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    depends_on:
+      - db
+    networks:
+      - frontend_net
+      - backend_net
+    restart: unless-stopped
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - backend_net
+    restart: unless-stopped
+
+networks:
+  frontend_net:
+  backend_net:
+
+volumes:
+  pg_data:
