@@ -1,7 +1,7 @@
 version: '3.9'
 
-# Archivo de producción: NO buildea nada localmente.
-# Las imágenes ya fueron buildeadas y subidas a GHCR por GitHub Actions.
+# Archivo de producciÃ³n: NO buildea nada localmente.
+# Las imÃ¡genes ya fueron buildeadas y subidas a GHCR por GitHub Actions.
 # El servidor solo necesita este archivo y el .env para levantar todo.
 #
 # Uso:
