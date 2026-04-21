@@ -1,0 +1,53 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches:
+      - main        # se dispara en cada push a main
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    # Permisos necesarios para pushear a GHCR
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+
+      # 1. Bajar el código del repo
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Autenticarse en GitHub Container Registry
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # token automático de GitHub Actions
+
+      # 3. Buildear y pushear la imagen del backend
+      - name: Build and push backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-backend:latest
+            ${{ env.IMAGE_PREFIX }}-backend:${{ github.sha }}
+
+      # 4. Buildear y pushear la imagen del frontend
+      - name: Build and push frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-frontend:latest
+            ${{ env.IMAGE_PREFIX }}-frontend:${{ github.sha }}
