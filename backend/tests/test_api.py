@@ -1,10 +1,9 @@
-﻿"""
+"""
 Tests de los endpoints de la API.
 
 Usa TestClient de FastAPI (no necesita un servidor corriendo,
 ni una base de datos real — mockea la conexion a Postgres).
 """
-import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
