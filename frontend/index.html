@@ -1,0 +1,123 @@
+﻿<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Tareas</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f0f2f5;
+      display: flex;
+      justify-content: center;
+      padding: 48px 16px;
+    }
+    .card {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      padding: 32px;
+      width: 100%;
+      max-width: 520px;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 24px; color: #1a1a2e; }
+    .form { display: flex; gap: 8px; margin-bottom: 24px; }
+    .form input {
+      flex: 1; padding: 10px 14px;
+      border: 1px solid #ddd; border-radius: 8px;
+      font-size: 0.95rem; outline: none; transition: border-color 0.2s;
+    }
+    .form input:focus { border-color: #4f6ef7; }
+    .form button {
+      padding: 10px 18px; background: #4f6ef7; color: white;
+      border: none; border-radius: 8px; cursor: pointer;
+      font-size: 0.95rem; font-weight: 600; transition: background 0.2s;
+    }
+    .form button:hover { background: #3a59e0; }
+    #task-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+    .task-item {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 14px; background: #fafafa;
+      border: 1px solid #eee; border-radius: 8px; transition: opacity 0.2s;
+    }
+    .task-item.done { opacity: 0.5; }
+    .task-item .title { flex: 1; font-size: 0.95rem; color: #333; }
+    .task-item.done .title { text-decoration: line-through; }
+    .btn-toggle {
+      background: none; border: 1.5px solid #4f6ef7; color: #4f6ef7;
+      border-radius: 6px; padding: 4px 10px; cursor: pointer;
+      font-size: 0.8rem; font-weight: 600;
+    }
+    .btn-toggle:hover { background: #eef0ff; }
+    .btn-delete {
+      background: none; border: 1.5px solid #e55; color: #e55;
+      border-radius: 6px; padding: 4px 10px; cursor: pointer;
+      font-size: 0.8rem; font-weight: 600;
+    }
+    .btn-delete:hover { background: #ffeaea; }
+    .empty { text-align: center; color: #aaa; font-size: 0.9rem; padding: 24px 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📝 Lista de Tareas</h1>
+    <div class="form">
+      <input id="new-task" type="text" placeholder="Nueva tarea..." />
+      <button onclick="createTask()">Agregar</button>
+    </div>
+    <ul id="task-list"></ul>
+  </div>
+
+  <script>
+    const API = '/api';
+
+    async function loadTasks() {
+      const res   = await fetch(API + '/tasks');
+      const tasks = await res.json();
+      const list  = document.getElementById('task-list');
+
+      if (tasks.length === 0) {
+        list.innerHTML = '<p class="empty">No hay tareas todavia.</p>';
+        return;
+      }
+
+      list.innerHTML = tasks.map(function(t) {
+        return '<li class="task-item ' + (t.done ? 'done' : '') + '" id="task-' + t.id + '">' +
+          '<span class="title">' + t.title + '</span>' +
+          '<button class="btn-toggle" onclick="toggleTask(' + t.id + ')">' + (t.done ? 'Reabrir' : 'Hecho') + '</button>' +
+          '<button class="btn-delete" onclick="deleteTask(' + t.id + ')">Borrar</button>' +
+          '</li>';
+      }).join('');
+    }
+
+    async function createTask() {
+      const input = document.getElementById('new-task');
+      const title = input.value.trim();
+      if (!title) return;
+      await fetch(API + '/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title }),
+      });
+      input.value = '';
+      loadTasks();
+    }
+
+    document.getElementById('new-task')
+      .addEventListener('keydown', function(e) { if (e.key === 'Enter') createTask(); });
+
+    async function toggleTask(id) {
+      await fetch(API + '/tasks/' + id + '/toggle', { method: 'PATCH' });
+      loadTasks();
+    }
+
+    async function deleteTask(id) {
+      await fetch(API + '/tasks/' + id, { method: 'DELETE' });
+      loadTasks();
+    }
+
+    loadTasks();
+  </script>
+</body>
+</html>
