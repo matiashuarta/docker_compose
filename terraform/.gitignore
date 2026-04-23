@@ -1,0 +1,6 @@
+# .gitignore (inside the terraform/ folder)
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfvars
