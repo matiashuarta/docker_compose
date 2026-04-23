@@ -35,7 +35,7 @@ jobs:
       - name: Run tests
         run: pytest backend/tests/ -v
 
-  # ── 2. CD ────────────────────────────────────────────────────────────────
+  # ── 2. CD - Build and Push ────────────────────────────────────────────────
   build-and-push:
     name: CD - Build and Push Images
     runs-on: ubuntu-latest
@@ -56,22 +56,44 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push backend
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          push: true
-          no-cache: true
-          tags: |
-            ${{ env.IMAGE_PREFIX }}-backend:latest
-            ${{ env.IMAGE_PREFIX }}-backend:${{ github.sha }}
-
       - name: Build and push frontend
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
           push: true
-          no-cache: true
-          tags: |
-            ${{ env.IMAGE_PREFIX }}-frontend:latest
-            ${{ env.IMAGE_PREFIX }}-frontend:${{ github.sha }}
+          tags: ${{ env.IMAGE_PREFIX }}-frontend:latest
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}-backend:latest
+
+  # ── 3. CD - Deploy to ECS ─────────────────────────────────────────────────
+  deploy:
+    name: CD - Deploy to ECS
+    runs-on: ubuntu-latest
+    needs: [build-and-push]  # only runs after images are successfully pushed
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Deploy frontend to ECS
+        run: |
+          aws ecs update-service \
+            --cluster docker-compose-app-cluster \
+            --service docker-compose-app-frontend \
+            --force-new-deployment
+
+      - name: Deploy backend to ECS
+        run: |
+          aws ecs update-service \
+            --cluster docker-compose-app-cluster \
+            --service docker-compose-app-backend \
+            --force-new-deployment
