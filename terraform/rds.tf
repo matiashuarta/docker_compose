@@ -25,7 +25,7 @@ resource "aws_db_instance" "postgres" {
   db_subnet_group_name   = aws_db_subnet_group.main.name           # place it in the private subnets
   vpc_security_group_ids = [aws_security_group.rds.id]             # apply the RDS firewall rules
 
-  skip_final_snapshot = true   # when you destroy this DB, don't save a backup snapshot first
+  skip_final_snapshot = false   # when you destroy this DB, don't save a backup snapshot first, or save snapshot if turn to "false"
                                 # set to false in production so you don't lose data on terraform destroy
   publicly_accessible = false  # NOT reachable from the internet — only from inside the VPC
 
