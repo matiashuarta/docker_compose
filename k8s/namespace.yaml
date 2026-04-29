@@ -1,0 +1,7 @@
+# namespace: a logical group to isolate your app's resources from Kubernetes system pods
+# equivalent to nothing in ECS — ECS had no concept of namespaces
+# all k8s resources below reference namespace: app
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app

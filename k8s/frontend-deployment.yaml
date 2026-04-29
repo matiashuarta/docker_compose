@@ -1,0 +1,33 @@
+# frontend-deployment.yaml: replaces aws_ecs_task_definition + aws_ecs_service for the frontend
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: app
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # kills old pod before starting new one — avoids OOM on single t3.small node
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/matiashuarta/docker_compose-frontend:latest
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+          env:
+            - name: BACKEND_HOST
+              # in ECS this was the internal ALB DNS name (long AWS hostname)
+              # in Kubernetes, the backend is reachable via internal DNS — much simpler
+              # port 8000 must be included — unlike ECS there is no ALB translating 80→8000
+              value: backend.app.svc.cluster.local:8000

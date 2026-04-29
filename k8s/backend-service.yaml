@@ -1,0 +1,21 @@
+# backend-service.yaml: exposes the backend pods inside the cluster
+#
+# ClusterIP = internal only, not reachable from the internet
+# equivalent to the internal ALB in the ECS setup — but simpler:
+#   ECS needed a full ALB to route between containers
+#   Kubernetes has built-in DNS, so frontend just calls: http://backend:8000
+#
+# Kubernetes DNS resolves "backend" to this service automatically
+# full DNS name: backend.app.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: app
+spec:
+  selector:
+    app: backend  # sends traffic to pods with label app=backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP
