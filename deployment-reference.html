@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  body { font-family: Calibri, Arial, sans-serif; max-width: 900px; margin: 40px auto; color: #222; line-height: 1.6; }
+  h1 { color: #1a1a2e; border-bottom: 3px solid #1a1a2e; padding-bottom: 8px; }
+  h2 { color: #16213e; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top: 36px; }
+  h3 { color: #0f3460; margin-top: 24px; }
+  code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: Consolas, monospace; font-size: 0.92em; }
+  pre { background: #f4f4f4; border-left: 4px solid #0f3460; padding: 14px 16px; border-radius: 4px; overflow-x: auto; font-family: Consolas, monospace; font-size: 0.88em; line-height: 1.5; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+  th { background: #1a1a2e; color: white; padding: 8px 12px; text-align: left; }
+  td { border: 1px solid #ccc; padding: 8px 12px; vertical-align: top; }
+  tr:nth-child(even) { background: #f9f9f9; }
+  .note { background: #fff8e1; border-left: 4px solid #f59e0b; padding: 10px 14px; margin: 12px 0; border-radius: 3px; }
+  .section { margin-bottom: 40px; }
+</style>
+<title>Docker / ECS / EKS Deployment Reference</title>
+</head>
+<body>
+
+<h1>Docker / ECS / EKS — Deployment Reference</h1>
+<p><em>Reference document covering all deployment scenarios for the docker-compose-app project.</em></p>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>1. Project Overview</h2>
+<div class="section">
+<p>A simple tasks app (FastAPI + PostgreSQL + HTML/JS frontend) used as a reference for five different deployment strategies.</p>
+
+<table>
+  <tr><th>Layer</th><th>Technology</th></tr>
+  <tr><td>Frontend</td><td>HTML/JS + Nginx</td></tr>
+  <tr><td>Backend</td><td>Python + FastAPI</td></tr>
+  <tr><td>Database</td><td>PostgreSQL 16</td></tr>
+</table>
+
+<h3>Repository structure</h3>
+<pre>
+docker_compose/
+├── docker-compose.yml           # local dev
+├── docker-compose.prod.yml      # single server
+├── docker-compose.swarm.yml     # Docker Swarm
+├── setup-eks.sh                 # EKS post-apply script
+├── backend/
+├── frontend/
+├── terraform/                   # ECS infrastructure
+├── terraform-eks/               # EKS infrastructure
+└── k8s/                         # Kubernetes manifests
+</pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>2. Five Deployment Scenarios</h2>
+<div class="section">
+
+<h3>Scenario 1 — Local dev (<code>docker-compose.yml</code>)</h3>
+<p>Builds images from source on your machine. All three services run in Docker on localhost.</p>
+<pre>
+cp .env.example .env
+docker compose up -d --build
+# open http://localhost
+docker compose down        # stop
+docker compose down -v     # stop + delete database volume
+</pre>
+
+<h3>Scenario 2 — Single server (<code>docker-compose.prod.yml</code>)</h3>
+<p>Pulls pre-built images from GitHub Container Registry (GHCR). No build step on the server — GitHub Actions builds and pushes on every merge to main.</p>
+<pre>
+cp .env.example .env   # set GITHUB_USER, GITHUB_REPO, DB credentials
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+</pre>
+
+<h3>Scenario 3 — Docker Swarm (<code>docker-compose.swarm.yml</code>)</h3>
+<p>Multi-node deployment. Uses overlay networks so containers on different machines can communicate. DB is pinned to the manager node.</p>
+<pre>
+# manager node
+docker swarm init
+# worker nodes
+docker swarm join --token &lt;token&gt; &lt;manager-ip&gt;:2377
+
+# deploy
+docker stack deploy -c docker-compose.swarm.yml app
+docker stack ls
+docker stack rm app    # tear down
+</pre>
+
+<h3>Scenario 4 — AWS ECS / Fargate (<code>terraform/</code>)</h3>
+<p>Serverless containers on AWS. Terraform provisions VPC, ECS cluster, task definitions, ALB, and RDS.</p>
+<pre>
+cd terraform
+terraform init
+terraform apply
+# outputs the ALB URL when done
+terraform destroy      # stop charges
+</pre>
+
+<h3>Scenario 5 — AWS EKS / Kubernetes (<code>terraform-eks/</code> + <code>k8s/</code>)</h3>
+<p>Managed Kubernetes on AWS. Includes HPA (scales pods on CPU) and Cluster Autoscaler (scales EC2 nodes).</p>
+<pre>
+cd terraform-eks
+terraform init
+terraform apply
+
+# from repo root after apply:
+bash setup-eks.sh
+
+# get the frontend URL:
+kubectl get service frontend -n app
+
+# tear down:
+cd terraform-eks &amp;&amp; terraform destroy
+</pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>3. CI/CD Pipeline</h2>
+<div class="section">
+<p>GitHub Actions (<code>.github/workflows/ci-cd.yml</code>) runs on every push to <code>dev</code> or <code>main</code>:</p>
+<ol>
+  <li><strong>Test</strong> — lint with ruff, run pytest (no AWS needed)</li>
+  <li><strong>Build &amp; push</strong> — builds frontend and backend images, pushes to GHCR as <code>:latest</code></li>
+  <li><strong>Deploy (commented out)</strong> — uncomment either the ECS or EKS job depending on your environment</li>
+</ol>
+
+<h3>ECS auto-deploy (uncomment in ci-cd.yml)</h3>
+<pre>
+aws ecs update-service \
+  --cluster docker-compose-app-cluster \
+  --service docker-compose-app-backend \
+  --force-new-deployment
+</pre>
+
+<h3>EKS auto-deploy (uncomment in ci-cd.yml)</h3>
+<pre>
+aws eks update-kubeconfig --region us-east-1 --name docker-compose-app-cluster
+kubectl rollout restart deployment/frontend -n app
+kubectl rollout restart deployment/backend -n app
+</pre>
+<div class="note"><strong>Note:</strong> <code>update-kubeconfig</code> writes the cluster connection details and credentials into <code>~/.kube/config</code> so kubectl knows which cluster to talk to. A fresh CI runner has no kubeconfig, so this step runs every pipeline.</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>4. How Redeployment Works in Each Scenario</h2>
+<div class="section">
+<table>
+  <tr><th></th><th>Local</th><th>Single server</th><th>Swarm</th><th>ECS</th><th>EKS</th></tr>
+  <tr>
+    <td><strong>Redeploy command</strong></td>
+    <td><code>docker compose up -d --build</code></td>
+    <td><code>docker compose pull &amp;&amp; up -d</code></td>
+    <td><code>docker stack deploy -c swarm.yml app</code></td>
+    <td><code>aws ecs update-service --force-new-deployment</code></td>
+    <td><code>kubectl rollout restart deployment/backend -n app</code></td>
+  </tr>
+  <tr>
+    <td><strong>How it updates</strong></td>
+    <td>Rebuilds image from local source, recreates container</td>
+    <td>Pulls new :latest from GHCR, recreates container</td>
+    <td>Pulls new image, replaces tasks one by one (rolling)</td>
+    <td>Stops old tasks, starts new ones pulling :latest</td>
+    <td>Replaces pods one by one pulling :latest (rolling)</td>
+  </tr>
+  <tr>
+    <td><strong>Zero downtime?</strong></td>
+    <td>No — container stops and restarts</td>
+    <td>No — container stops and restarts</td>
+    <td>Yes — rolling replacement</td>
+    <td>Yes — rolling replacement</td>
+    <td>Yes — rolling replacement</td>
+  </tr>
+  <tr>
+    <td><strong>Rollback command</strong></td>
+    <td>Check out old git commit, rebuild</td>
+    <td>No built-in (need tagged images)</td>
+    <td><code>docker service rollback app_backend</code></td>
+    <td><code>aws ecs update-service --task-definition family:revision</code></td>
+    <td><code>kubectl rollout undo deployment/backend -n app</code></td>
+  </tr>
+  <tr>
+    <td><strong>History kept</strong></td>
+    <td>Only git history</td>
+    <td>Only what GHCR has</td>
+    <td>Previous 1 spec</td>
+    <td>All task definition revisions</td>
+    <td>10 revisions (configurable)</td>
+  </tr>
+</table>
+<div class="note"><strong>Key point:</strong> ECS, Swarm, and EKS remember previous configurations, so rollback does not need to re-pull an old image from the registry if it's still cached on the node. If the node is fresh, it pulls from GHCR.</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>5. EKS Architecture</h2>
+<div class="section">
+
+<h3>Kubernetes resources created</h3>
+<table>
+  <tr><th>File</th><th>What it creates</th><th>ECS equivalent</th></tr>
+  <tr><td>namespace.yaml</td><td>Namespace <code>app</code></td><td>—</td></tr>
+  <tr><td>secret.yaml</td><td>DATABASE_URL with RDS endpoint</td><td>env var in task definition</td></tr>
+  <tr><td>backend-deployment.yaml</td><td>Backend pod, 1 replica, 250m CPU / 512Mi RAM</td><td>ECS task definition + service</td></tr>
+  <tr><td>backend-service.yaml</td><td>ClusterIP on port 8000 (internal only)</td><td>Internal ALB target group</td></tr>
+  <tr><td>frontend-deployment.yaml</td><td>Frontend pod, BACKEND_HOST via k8s DNS</td><td>ECS task definition + service</td></tr>
+  <tr><td>frontend-service.yaml</td><td>LoadBalancer on port 80 (public)</td><td>Public ALB</td></tr>
+  <tr><td>backend-hpa.yaml</td><td>HPA: scale pods when CPU &gt; 70%, max 5</td><td>ECS appautoscaling</td></tr>
+  <tr><td>cluster-autoscaler.yaml</td><td>Scales EC2 nodes when pods are Pending</td><td>—</td></tr>
+</table>
+
+<h3>Internal networking</h3>
+<p>In ECS, services communicated via an internal ALB (long AWS hostname). In Kubernetes, services communicate via internal DNS — much simpler:</p>
+<pre>
+# From any pod in the cluster, the backend is reachable at:
+backend.app.svc.cluster.local:8000
+
+# From within the same namespace (app), just:
+backend:8000
+</pre>
+
+<h3>HPA (Horizontal Pod Autoscaler)</h3>
+<p>Scales the number of backend <em>pods</em> based on CPU usage.</p>
+<ul>
+  <li>Threshold: 70% of the pod's requested CPU (250m)</li>
+  <li>Min replicas: 1, Max replicas: 5</li>
+  <li>Requires <strong>metrics-server</strong> to be installed in the cluster</li>
+  <li>Scale-down has a 5-minute cooldown by default</li>
+</ul>
+<pre>
+kubectl get hpa -n app                          # see current CPU% and replica count
+kubectl top pod -n app                          # see raw CPU/memory usage
+</pre>
+
+<h3>Cluster Autoscaler</h3>
+<p>Scales the number of EC2 <em>nodes</em>. Triggered when pods are stuck in <code>Pending</code> because no node has enough resources.</p>
+<ul>
+  <li>Not CPU-threshold based — it watches for Pending pods</li>
+  <li>Configured via node group tags: <code>k8s.io/cluster-autoscaler/enabled</code></li>
+  <li>Runs as a pod in the <code>kube-system</code> namespace</li>
+</ul>
+
+<h3>Deployment strategy: Recreate vs RollingUpdate</h3>
+<p>Our deployments use <code>strategy: Recreate</code> — kills the old pod before starting the new one. This avoids Out-Of-Memory errors on a single <code>t3.small</code> node that can't fit two pods simultaneously. In production with multiple nodes, you'd use <code>RollingUpdate</code> for zero downtime.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>6. IAM Roles in EKS</h2>
+<div class="section">
+<p>EKS needs two IAM roles (ECS only needed one):</p>
+<table>
+  <tr><th>Role</th><th>Assumed by</th><th>Purpose</th></tr>
+  <tr><td>eks-cluster-role</td><td>EKS control plane</td><td>Manage network interfaces, load balancers</td></tr>
+  <tr><td>eks-node-role</td><td>EC2 worker nodes</td><td>Join cluster, pull images from ECR, send logs</td></tr>
+</table>
+<p>The node role also has a custom <strong>ClusterAutoscalerPolicy</strong> attached, allowing the Cluster Autoscaler pod to call AWS Auto Scaling APIs to add/remove nodes.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>7. EKS Node Storage</h2>
+<div class="section">
+<p>Each EC2 worker node gets an EBS (Elastic Block Store) volume automatically. This is ephemeral storage for the node's OS and container layers — not for application data. Key points:</p>
+<ul>
+  <li>t3.small nodes get a default 20 GB EBS volume</li>
+  <li>The database uses RDS (managed), not a volume on the node</li>
+  <li>If a node is terminated and replaced (by Cluster Autoscaler), the EBS volume is also replaced — no data loss because app data lives in RDS</li>
+  <li>In ECS/Fargate: no EBS — Fargate containers run on AWS-managed compute with no persistent disk</li>
+  <li>In Swarm: containers run on EC2 instances; the DB volume (<code>pg_data</code>) lives on whichever node the DB container is on</li>
+</ul>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>8. Docker Swarm vs EKS — Key Differences</h2>
+<div class="section">
+<table>
+  <tr><th></th><th>Docker Swarm</th><th>EKS / Kubernetes</th></tr>
+  <tr><td><strong>Config file</strong></td><td>docker-compose.swarm.yml</td><td>k8s/*.yaml (separate files per resource)</td></tr>
+  <tr><td><strong>Networking</strong></td><td>Overlay networks (cross-node)</td><td>VPC CNI — pods get real VPC IPs</td></tr>
+  <tr><td><strong>Internal DNS</strong></td><td>Service name (e.g. <code>backend</code>)</td><td><code>backend.app.svc.cluster.local</code></td></tr>
+  <tr><td><strong>Autoscaling</strong></td><td>Manual (<code>docker service scale</code>)</td><td>HPA (pods) + Cluster Autoscaler (nodes)</td></tr>
+  <tr><td><strong>Rollback</strong></td><td><code>docker service rollback</code> (1 version)</td><td><code>kubectl rollout undo</code> (up to 10 versions)</td></tr>
+  <tr><td><strong>Managed service</strong></td><td>Self-managed</td><td>AWS manages the control plane</td></tr>
+</table>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>9. Full Command Reference</h2>
+<div class="section">
+
+<!-- ─── LOCAL DEV ──────────────────────────────────────────── -->
+<h3>Local dev — docker compose</h3>
+<pre>
+# start
+docker compose up -d                             # start all services in background
+docker compose up -d --build                     # rebuild images first, then start
+docker compose up --build backend                # rebuild and restart only one service
+
+# stop
+docker compose down                              # stop and remove containers (keeps volumes)
+docker compose down -v                           # also delete volumes (wipes database)
+docker compose down --rmi all                    # also delete images
+
+# status and logs
+docker compose ps                                # show running containers and their ports
+docker compose logs -f                           # stream logs from all services
+docker compose logs -f backend                   # stream logs from one service
+docker compose logs --tail=50 backend            # last 50 lines only
+
+# run a command inside a running container
+docker compose exec backend bash                 # open a shell in the backend container
+docker compose exec db psql -U app -d tasksdb   # open a postgres prompt
+
+# restart without rebuild
+docker compose restart backend                   # restart one service (same image)
+docker compose stop backend                      # stop without removing container
+docker compose start backend                     # start a stopped container
+
+# inspect
+docker compose config                            # print full resolved config (all vars substituted)
+docker compose images                            # list images used by each service
+</pre>
+
+<!-- ─── DOCKER GENERAL ──────────────────────────────────────── -->
+<h3>Docker general</h3>
+<pre>
+# containers
+docker ps                                        # running containers
+docker ps -a                                     # all containers including stopped
+docker inspect &lt;container&gt;                       # full JSON config of a container
+docker stats                                     # live CPU/memory usage for all containers
+docker exec -it &lt;container&gt; bash                 # open shell in running container
+docker logs &lt;container&gt; -f                       # stream logs from any container
+
+# images
+docker images                                    # list local images
+docker pull ghcr.io/user/repo-backend:latest     # pull an image manually
+docker rmi &lt;image-id&gt;                            # delete an image
+docker image prune -f                            # delete dangling (untagged) images
+
+# volumes
+docker volume ls                                 # list all volumes
+docker volume inspect pg_data                    # inspect a volume (shows mountpoint)
+docker volume rm pg_data                         # delete a volume
+
+# cleanup
+docker system prune -f                           # remove stopped containers, unused networks, dangling images
+docker system prune -af                          # also remove all unused images
+docker system df                                 # show disk usage by Docker
+</pre>
+
+<!-- ─── SINGLE SERVER ───────────────────────────────────────── -->
+<h3>Single server — docker compose prod</h3>
+<pre>
+# authenticate to GHCR (needed once per server)
+echo &lt;PAT&gt; | docker login ghcr.io -u &lt;GITHUB_USER&gt; --password-stdin
+
+# deploy / update
+docker compose -f docker-compose.prod.yml pull            # pull latest images from GHCR
+docker compose -f docker-compose.prod.yml up -d           # start (or recreate with new images)
+docker compose -f docker-compose.prod.yml up -d backend   # update only backend
+
+# status and logs
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs -f
+docker compose -f docker-compose.prod.yml logs --tail=100 backend
+
+# stop
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml down -v         # also wipes database
+</pre>
+
+<!-- ─── SWARM ───────────────────────────────────────────────── -->
+<h3>Docker Swarm — cluster setup</h3>
+<pre>
+# initialize swarm on the manager node
+docker swarm init --advertise-addr &lt;manager-ip&gt;          # outputs a join token
+
+# add worker nodes (run on each worker)
+docker swarm join --token &lt;token&gt; &lt;manager-ip&gt;:2377
+
+# view cluster nodes (run on manager)
+docker node ls                                            # lists all nodes and their roles/status
+docker node inspect &lt;node-id&gt; --pretty                   # details about a node
+docker node update --availability drain &lt;node-id&gt;        # stop scheduling new tasks to a node
+docker swarm leave --force                                # remove a node from the swarm
+</pre>
+
+<h3>Docker Swarm — stack and service management</h3>
+<pre>
+# deploy / update
+export $(cat .env | xargs)                               # load .env into shell (swarm doesn't auto-read .env)
+docker stack deploy -c docker-compose.swarm.yml app      # deploy or update the stack
+
+# inspect
+docker stack ls                                          # list all stacks
+docker stack ps app                                      # show all tasks in the stack (including failed)
+docker service ls                                        # list all services and replica counts
+docker service ps app_backend                            # show task history for one service (good for debugging)
+docker service logs app_backend -f                       # stream logs from all replicas of a service
+docker service inspect app_backend --pretty              # full config of a service
+
+# update
+docker service update --image ghcr.io/user/repo-backend:v2 app_backend   # deploy specific image
+docker service update --replicas 3 app_backend           # manually change replica count
+docker service update --force app_backend                # force restart without image change
+
+# rollback
+docker service rollback app_backend                      # roll back to previous task spec
+
+# scale
+docker service scale app_backend=3                       # scale to 3 replicas
+
+# tear down
+docker stack rm app                                      # remove entire stack (keeps volumes)
+</pre>
+
+<!-- ─── TERRAFORM ───────────────────────────────────────────── -->
+<h3>Terraform (applies to both terraform/ and terraform-eks/)</h3>
+<pre>
+terraform init                                           # download providers and modules (run once)
+terraform plan                                           # preview what will be created/changed/destroyed
+terraform apply                                          # create/update infrastructure
+terraform apply -auto-approve                            # skip confirmation prompt
+terraform destroy                                        # destroy all managed resources
+terraform destroy -auto-approve                          # skip confirmation prompt
+terraform output                                         # show all output values
+terraform output -raw rds_endpoint                       # get a single output value as plain string
+terraform show                                           # show current state in human-readable form
+terraform state list                                     # list all resources in state file
+terraform state show aws_db_instance.postgres            # inspect one resource in state
+terraform import aws_db_instance.postgres &lt;db-id&gt;       # import existing AWS resource into state
+</pre>
+
+<!-- ─── ECS ─────────────────────────────────────────────────── -->
+<h3>AWS ECS</h3>
+<pre>
+# cluster and services
+aws ecs list-clusters
+aws ecs describe-clusters --clusters docker-compose-app-cluster
+aws ecs list-services --cluster docker-compose-app-cluster
+aws ecs describe-services --cluster docker-compose-app-cluster --services docker-compose-app-backend
+
+# deploy (force pull latest image)
+aws ecs update-service \
+  --cluster docker-compose-app-cluster \
+  --service docker-compose-app-backend \
+  --force-new-deployment
+
+# rollback to a specific task definition revision
+aws ecs list-task-definitions --family-prefix docker-compose-app-backend   # see all revisions
+aws ecs update-service \
+  --cluster docker-compose-app-cluster \
+  --service docker-compose-app-backend \
+  --task-definition docker-compose-app-backend:3               # roll back to revision 3
+
+# tasks (running instances of a service)
+aws ecs list-tasks --cluster docker-compose-app-cluster --service-name docker-compose-app-backend
+aws ecs describe-tasks --cluster docker-compose-app-cluster --tasks &lt;task-arn&gt;
+aws ecs stop-task --cluster docker-compose-app-cluster --task &lt;task-arn&gt;   # force restart a task
+
+# logs (ECS sends logs to CloudWatch)
+aws logs get-log-events \
+  --log-group-name /ecs/docker-compose-app \
+  --log-stream-name ecs/backend/&lt;task-id&gt; \
+  --limit 50
+</pre>
+
+<!-- ─── EKS / KUBECTL ──────────────────────────────────────── -->
+<h3>EKS — cluster setup</h3>
+<pre>
+# connect kubectl to the EKS cluster
+aws eks update-kubeconfig --region us-east-1 --name docker-compose-app-cluster
+
+# verify connection
+kubectl cluster-info
+kubectl get nodes
+kubectl get nodes -o wide                                # + IPs, OS, instance type
+</pre>
+
+<h3>kubectl — pods</h3>
+<pre>
+kubectl get pods -n app                                  # list pods
+kubectl get pods -n app -o wide                          # + which node each pod is on
+kubectl get pods -A                                      # all pods in all namespaces
+kubectl describe pod &lt;pod-name&gt; -n app                   # full details: events, resource limits, mounts
+kubectl logs &lt;pod-name&gt; -n app                           # pod logs
+kubectl logs &lt;pod-name&gt; -n app -f                        # stream logs
+kubectl logs &lt;pod-name&gt; -n app --previous               # logs from previous (crashed) container
+kubectl exec -it &lt;pod-name&gt; -n app -- bash               # open shell in pod
+kubectl delete pod &lt;pod-name&gt; -n app                     # delete pod (Deployment recreates it)
+</pre>
+
+<h3>kubectl — deployments and rollouts</h3>
+<pre>
+kubectl get deployments -n app
+kubectl describe deployment backend -n app
+kubectl rollout restart deployment/backend -n app        # redeploy (pulls latest image)
+kubectl rollout status deployment/backend -n app         # watch rollout progress
+kubectl rollout history deployment/backend -n app        # list revisions
+kubectl rollout undo deployment/backend -n app           # roll back to previous revision
+kubectl rollout undo deployment/backend -n app --to-revision=3   # roll back to specific revision
+kubectl scale deployment backend --replicas=3 -n app     # manually scale (bypasses HPA temporarily)
+</pre>
+
+<h3>kubectl — services, HPA, nodes</h3>
+<pre>
+kubectl get services -n app                              # list services and their IPs/ports
+kubectl get service frontend -n app                      # get LoadBalancer external IP
+kubectl get hpa -n app                                   # HPA: current CPU% vs threshold, replica count
+kubectl top pod -n app                                   # live CPU and memory per pod
+kubectl top node                                         # live CPU and memory per node
+kubectl get events -n app --sort-by='.lastTimestamp'     # recent events (good for debugging)
+</pre>
+
+<h3>kubectl — apply and delete manifests</h3>
+<pre>
+kubectl apply -f k8s/                                    # apply all manifests in the k8s/ folder
+kubectl apply -f k8s/backend-deployment.yaml             # apply a single file
+kubectl delete -f k8s/backend-deployment.yaml            # delete resources defined in a file
+kubectl get all -n app                                   # show all resources in the namespace
+kubectl get all -A                                       # show all resources in all namespaces
+</pre>
+
+<h3>kubectl — namespaces and secrets</h3>
+<pre>
+kubectl get namespaces
+kubectl get secrets -n app
+kubectl describe secret db-secret -n app                 # shows keys but not values
+kubectl get secret db-secret -n app -o jsonpath='{.data.database-url}' | base64 -d   # decode value
+
+# create/update the aws-credentials secret for Cluster Autoscaler
+kubectl create secret generic aws-credentials \
+  --namespace kube-system \
+  --from-literal=access-key-id=$(aws configure get aws_access_key_id) \
+  --from-literal=secret-access-key=$(aws configure get aws_secret_access_key) \
+  --dry-run=client -o yaml | kubectl apply -f -
+</pre>
+
+<!-- ─── RDS / AWS ───────────────────────────────────────────── -->
+<h3>AWS RDS and snapshots</h3>
+<pre>
+# list snapshots
+aws rds describe-db-snapshots --region us-east-1 \
+  --query 'DBSnapshots[*].[DBSnapshotIdentifier,Status,SnapshotCreateTime]' \
+  --output table
+
+# manually create a snapshot (before destroy, just in case)
+aws rds create-db-snapshot \
+  --db-instance-identifier docker-compose-app-db \
+  --db-snapshot-identifier my-manual-snapshot \
+  --region us-east-1
+
+# restore a snapshot (creates a new RDS instance)
+aws rds restore-db-instance-from-db-snapshot \
+  --db-instance-identifier docker-compose-app-db-restored \
+  --db-snapshot-identifier docker-compose-app-eks-final-snapshot \
+  --region us-east-1
+</pre>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>10. RDS Snapshots — Persistence and Restoration</h2>
+<div class="section">
+
+<h3>What happens on terraform destroy</h3>
+<p>Both ECS and EKS terraform configs have <code>skip_final_snapshot = false</code>, so AWS automatically saves a snapshot before deleting the RDS instance. The instance is deleted, but data survives in the snapshot.</p>
+
+<table>
+  <tr><th>Terraform folder</th><th>Snapshot name</th><th>Status</th></tr>
+  <tr><td>terraform/ (ECS)</td><td>docker-compose-app-final-snapshot</td><td>Already exists (created 2026-04-24)</td></tr>
+  <tr><td>terraform-eks/ (EKS)</td><td>docker-compose-app-eks-final-snapshot</td><td>Created on next terraform destroy</td></tr>
+</table>
+
+<div class="note"><strong>Important:</strong> Both folders originally used the same snapshot name, which would cause the EKS destroy to fail with a duplicate snapshot error. Fixed by renaming the EKS snapshot identifier to include <code>-eks-</code>.</div>
+
+<h3>Do ECS and EKS share the same database?</h3>
+<p>No. Each terraform folder creates its own independent RDS instance with its own endpoint. Data added via EKS does not appear in ECS and vice versa. They are two completely separate databases.</p>
+
+<h3>How to restore from snapshot after terraform apply</h3>
+<p><code>terraform apply</code> always creates a fresh empty database by default. It does NOT automatically restore from the snapshot. To restore, add <code>snapshot_identifier</code> to the <code>aws_db_instance</code> resource in <code>rds.tf</code> before running apply:</p>
+
+<pre>
+resource "aws_db_instance" "postgres" {
+  identifier        = "${var.project_name}-db"
+  engine            = "postgres"
+  engine_version    = "16"
+  instance_class    = "db.t3.micro"
+  allocated_storage = 20
+
+  # add this line — terraform creates the new instance from this snapshot instead of empty
+  snapshot_identifier = "docker-compose-app-eks-final-snapshot"
+
+  # username/password still required even when restoring from snapshot
+  username = var.db_username
+  password = var.db_password
+  ...
+}
+</pre>
+
+<p>Once you run <code>terraform apply</code> with that line, the new RDS instance starts with all your previous data. The <code>snapshot_identifier</code> is only used at creation time — subsequent applies ignore it since the resource already exists. You can leave the line in or remove it after.</p>
+
+<p><strong>Alternative — AWS Console:</strong> RDS → Snapshots → select snapshot → Restore DB Instance → creates a new instance → copy the new endpoint → update <code>k8s/secret.yaml</code> and re-run <code>setup-eks.sh</code>.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>16. EKS Deployment — Troubleshooting Log</h2>
+<div class="section">
+<p>All errors encountered during the initial EKS deployment, with root cause and fix.</p>
+
+<h3>Problem 1 — Backend could not reach RDS (connection timeout)</h3>
+<pre>sqlalchemy.exc.OperationalError: connection to server at "...rds.amazonaws.com" failed: Connection timed out</pre>
+<p><strong>Root cause:</strong> The RDS security group only allowed inbound traffic from the ECS task security group (by group ID). EKS managed node group EC2 instances are not ECS tasks — they use the node's own security group, which was not whitelisted.</p>
+<p><strong>Fix:</strong> Changed the RDS security group ingress rule from referencing the ECS SG by ID to allowing the entire VPC CIDR block (<code>10.0.0.0/16</code>). Any resource inside the VPC can reach RDS on port 5432.</p>
+<pre>
+# terraform-eks/security_groups.tf
+ingress {
+  from_port   = 5432
+  to_port     = 5432
+  protocol    = "tcp"
+  cidr_blocks = ["10.0.0.0/16"]   # was: source_security_group_id = aws_security_group.ecs_tasks.id
+}
+</pre>
+
+<h3>Problem 2 — nginx returned 499 / tasks could not be added</h3>
+<pre>2024/xx/xx [error] recv() failed (104: Connection reset by peer) while reading response header from upstream</pre>
+<p><strong>Root cause:</strong> The frontend nginx config used <code>$BACKEND_HOST</code> as the proxy target. In ECS, the internal ALB handled port translation (80 → 8000). In Kubernetes there is no ALB between services — nginx must specify the port explicitly. The backend ClusterIP service listens on port 8000, but the env var was set to just <code>backend.app.svc.cluster.local</code> with no port, so nginx was proxying to port 80 which nothing was listening on.</p>
+<p><strong>Fix:</strong> Added <code>:8000</code> to the BACKEND_HOST env var in the frontend deployment.</p>
+<pre>
+# k8s/frontend-deployment.yaml
+env:
+  - name: BACKEND_HOST
+    value: backend.app.svc.cluster.local:8000   # was: backend.app.svc.cluster.local
+</pre>
+
+<h3>Problem 3 — Rolling update stuck in Pending (Insufficient memory)</h3>
+<pre>
+0/1 nodes are available: 1 Insufficient memory.
+preemption: 0/1 nodes are available: 1 No preemption victims found for incoming pod.
+</pre>
+<p><strong>Root cause:</strong> The default deployment strategy is <code>RollingUpdate</code>, which starts the new pod before killing the old one. On a single <code>t3.small</code> node (2GB RAM), running two 512Mi pods simultaneously exhausted available memory. The new pod could never start, so the rollout was stuck forever.</p>
+<p><strong>Fix:</strong> Changed both deployments to <code>strategy: Recreate</code>, which kills the old pod first and then starts the new one. Brief downtime, but no OOM.</p>
+<pre>
+# k8s/backend-deployment.yaml and frontend-deployment.yaml
+spec:
+  strategy:
+    type: Recreate   # was: RollingUpdate (default)
+</pre>
+
+<h3>Problem 4 — Cluster Autoscaler: MissingRegion</h3>
+<pre>Failed to create AWS Manager: MissingRegion: could not find region configuration</pre>
+<p><strong>Root cause:</strong> The Cluster Autoscaler pod needs to know which AWS region the cluster is in. It was not inferring it from metadata.</p>
+<p><strong>Fix:</strong> Added <code>AWS_REGION</code> env var to the Cluster Autoscaler deployment.</p>
+<pre>
+env:
+  - name: AWS_REGION
+    value: "us-east-1"
+</pre>
+
+<h3>Problem 5 — Cluster Autoscaler: NoCredentialProviders</h3>
+<pre>NoCredentialProviders: no valid providers in chain</pre>
+<p><strong>Root cause:</strong> The Cluster Autoscaler pod needs AWS credentials to call Auto Scaling APIs. The pod had no IAM role attached (IRSA not configured), and no credentials in the environment.</p>
+<p><strong>Fix:</strong> Created a Kubernetes secret from the local AWS CLI credentials and mounted it as env vars in the Cluster Autoscaler pod. In production, IRSA (IAM Roles for Service Accounts) is the proper solution — it gives the pod an IAM role without storing credentials as secrets.</p>
+<pre>
+# create the secret (done in setup-eks.sh)
+kubectl create secret generic aws-credentials \
+  --namespace kube-system \
+  --from-literal=access-key-id=$(aws configure get aws_access_key_id) \
+  --from-literal=secret-access-key=$(aws configure get aws_secret_access_key)
+
+# referenced in cluster-autoscaler.yaml
+env:
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: aws-credentials
+        key: access-key-id
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: aws-credentials
+        key: secret-access-key
+</pre>
+
+<h3>Problem 6 — Cluster Autoscaler: leader election lock (pod stuck)</h3>
+<pre>
+Failed to acquire lease kube-system/cluster-autoscaler
+Waiting for leader election...
+</pre>
+<p><strong>Root cause:</strong> Kubernetes uses a lease object (a lock) so only one Cluster Autoscaler replica runs at a time. A previous crashed pod still held the lease. The new pod saw the lease was taken and kept waiting — but the holder was dead, so nobody would ever release it.</p>
+<p><strong>Fix:</strong> Deleted the old crashing pod manually. Kubernetes replaced it with a fresh pod that successfully acquired the expired lease.</p>
+<pre>kubectl delete pod &lt;old-autoscaler-pod&gt; -n kube-system</pre>
+
+<h3>Problem 7 — HPA showing "cpu: unknown"</h3>
+<pre>
+NAME          REFERENCE            TARGETS          MINPODS   MAXPODS   REPLICAS
+backend-hpa   Deployment/backend   cpu: unknown/70%   1         5         1
+</pre>
+<p><strong>Root cause:</strong> HPA reads CPU metrics from the Kubernetes Metrics Server. The Metrics Server was not installed — EKS does not include it by default.</p>
+<p><strong>Fix:</strong> Installed metrics-server via its official manifest.</p>
+<pre>kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml</pre>
+<p>After ~60 seconds, HPA began showing real CPU percentages and could make scaling decisions.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>12. Local Dev — Troubleshooting Log</h2>
+<div class="section">
+
+<h3>Problem — Backend crashes immediately on startup</h3>
+<pre>backend_1  | sqlalchemy.exc.OperationalError: could not connect to server: Connection refused</pre>
+<p><strong>Root cause:</strong> Docker Compose starts all containers roughly in parallel. The backend tries to connect to PostgreSQL before the database process inside the <code>db</code> container is ready to accept connections. <code>depends_on</code> only waits for the container to <em>start</em>, not for the database to be ready.</p>
+<p><strong>Fix:</strong> Add <code>restart: on-failure</code> to the backend service so it retries automatically. A more robust fix is a healthcheck on the db service combined with <code>depends_on: condition: service_healthy</code>.</p>
+<pre>
+# docker-compose.yml
+backend:
+  restart: on-failure   # retries until db is ready
+
+# or with healthcheck (more explicit):
+db:
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+    interval: 5s
+    retries: 5
+
+backend:
+  depends_on:
+    db:
+      condition: service_healthy
+</pre>
+
+<h3>Problem — Port already in use</h3>
+<pre>Error: Bind for 0.0.0.0:80 failed: port is already allocated</pre>
+<p><strong>Root cause:</strong> Another process (another Docker container, nginx, IIS on Windows) is already listening on that port.</p>
+<p><strong>Fix:</strong> Find and stop the conflicting process, or change <code>FRONTEND_PORT</code> in your <code>.env</code> file to a free port (e.g. 8080).</p>
+<pre>
+# find what's using port 80 on Linux/Mac
+sudo lsof -i :80
+# on Windows
+netstat -ano | findstr :80
+</pre>
+
+<h3>Problem — Code change not reflected after docker compose up</h3>
+<p><strong>Root cause:</strong> <code>docker compose up -d</code> without <code>--build</code> reuses the existing image. Your code change is on disk but the container is still running the old image.</p>
+<p><strong>Fix:</strong> Always pass <code>--build</code> when you want to pick up code changes.</p>
+<pre>docker compose up -d --build</pre>
+
+<h3>Problem — "No space left on device" inside container</h3>
+<pre>ERROR: failed to solve: no space left on device</pre>
+<p><strong>Root cause:</strong> Docker's local disk (used for images, build cache, and volumes) is full. This is common after many builds without cleanup.</p>
+<p><strong>Fix:</strong> Prune unused Docker resources.</p>
+<pre>
+docker system prune -f          # removes stopped containers, dangling images, unused networks
+docker system prune -af         # also removes all unused images (more aggressive)
+docker volume prune -f          # removes unused volumes (careful — deletes data)
+</pre>
+
+<h3>Problem — Frontend can't reach backend (network error in browser)</h3>
+<p><strong>Root cause:</strong> The browser runs on your host machine, not inside Docker. If the frontend JavaScript tries to call <code>http://backend:8000</code> directly, the browser doesn't know what <code>backend</code> means — that hostname only resolves inside the Docker network.</p>
+<p><strong>Fix:</strong> API calls from the browser must go to <code>localhost</code> (the host machine), not to container names. The nginx reverse proxy handles the translation: the browser calls <code>localhost/api/...</code>, nginx (inside the container) forwards it to <code>backend:8000</code> using Docker's internal DNS.</p>
+
+<h3>Problem — .env file not found / variables are empty</h3>
+<pre>WARNING: The POSTGRES_USER variable is not set. Defaulting to a blank string.</pre>
+<p><strong>Root cause:</strong> The <code>.env</code> file doesn't exist, or it's named wrong (e.g. <code>.env.example</code> was never copied).</p>
+<p><strong>Fix:</strong></p>
+<pre>cp .env.example .env
+# then edit .env with your values</pre>
+
+<h3>Problem — Volume data persists unexpectedly between runs</h3>
+<p><strong>Root cause:</strong> <code>docker compose down</code> stops containers but does NOT delete named volumes. The <code>pg_data</code> volume (and all its database data) survives.</p>
+<p><strong>Fix:</strong> Use <code>-v</code> flag to also remove volumes. Only do this when you want a clean database.</p>
+<pre>
+docker compose down       # stops containers, keeps volumes
+docker compose down -v    # stops containers AND deletes volumes (wipes database)
+</pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>13. Single Server — Troubleshooting Log</h2>
+<div class="section">
+
+<h3>Problem — Can't pull image from GHCR (401 Unauthorized)</h3>
+<pre>Error response from daemon: unauthorized: unauthenticated request</pre>
+<p><strong>Root cause:</strong> GitHub Container Registry requires authentication even for public packages depending on visibility settings. The server has never logged in to GHCR.</p>
+<p><strong>Fix:</strong> Log in with a GitHub Personal Access Token (PAT) that has <code>read:packages</code> scope.</p>
+<pre>
+echo &lt;YOUR_PAT&gt; | docker login ghcr.io -u &lt;YOUR_GITHUB_USER&gt; --password-stdin
+docker compose -f docker-compose.prod.yml pull
+</pre>
+
+<h3>Problem — docker compose pull doesn't update the image (still runs old version)</h3>
+<p><strong>Root cause:</strong> <code>docker compose pull</code> downloads the latest image but the running container is still using the old one. Pulling doesn't restart containers.</p>
+<p><strong>Fix:</strong> After pulling, recreate the containers.</p>
+<pre>
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d   # recreates containers with new image
+</pre>
+
+<h3>Problem — App is up but database is empty after server reboot</h3>
+<p><strong>Root cause:</strong> The <code>pg_data</code> Docker volume survives normal container stops, but if Docker itself was reinstalled or the volume was deleted, data is gone. Also, if the db container starts without the volume being mounted, it initializes a fresh empty database.</p>
+<p><strong>Fix:</strong> Never run <code>docker compose down -v</code> on a production server unless you intend to wipe data. Confirm the volume exists before starting.</p>
+<pre>docker volume ls | grep pg_data</pre>
+
+<h3>Problem — Port 80 blocked by server firewall</h3>
+<p><strong>Root cause:</strong> Cloud providers (AWS EC2, DigitalOcean, etc.) have a security group / firewall in front of the VM. Even if Docker is listening on port 80, external traffic can't reach it if the firewall doesn't allow it.</p>
+<p><strong>Fix:</strong> In the cloud console, add an inbound rule allowing TCP port 80 (and 443 for HTTPS) from <code>0.0.0.0/0</code>.</p>
+
+<h3>Problem — Container exits immediately with no logs</h3>
+<p><strong>Root cause:</strong> A missing environment variable or misconfigured <code>.env</code> on the server causes the app to crash before it can log anything useful.</p>
+<p><strong>Fix:</strong> Check logs and verify all required variables are set.</p>
+<pre>
+docker compose -f docker-compose.prod.yml logs backend
+docker compose -f docker-compose.prod.yml config   # prints resolved config with all vars substituted
+</pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>14. Docker Swarm — Troubleshooting Log</h2>
+<div class="section">
+
+<h3>Problem — Environment variables not substituted in stack deploy</h3>
+<pre>
+invalid interpolation format for "image" option in service "frontend":
+  "ghcr.io/${GITHUB_USER}/..."
+</pre>
+<p><strong>Root cause:</strong> <code>docker stack deploy</code> does NOT automatically read a <code>.env</code> file the way <code>docker compose up</code> does. Variables in the stack file are not substituted.</p>
+<p><strong>Fix:</strong> Export the variables into your shell environment before deploying, or use <code>env $(cat .env | xargs)</code>.</p>
+<pre>
+export $(cat .env | xargs)
+docker stack deploy -c docker-compose.swarm.yml app
+</pre>
+
+<h3>Problem — Worker node can't join the swarm</h3>
+<pre>Error response from daemon: rpc error: code = Unavailable</pre>
+<p><strong>Root cause:</strong> The firewall on the manager node is blocking the ports Swarm uses for cluster communication.</p>
+<p><strong>Fix:</strong> Open these ports on the manager node's firewall/security group:</p>
+<pre>
+TCP 2377   # cluster management (join tokens, leader election)
+TCP/UDP 7946   # node-to-node communication
+UDP 4789   # overlay network traffic (VXLAN)
+</pre>
+
+<h3>Problem — Service image not found on worker nodes</h3>
+<pre>No such image: ghcr.io/user/repo-backend:latest</pre>
+<p><strong>Root cause:</strong> Swarm dispatches tasks to worker nodes. Workers pull images independently from the registry. If a worker has never logged in to GHCR, it can't pull the image.</p>
+<p><strong>Fix:</strong> Log in to GHCR on every node in the swarm, not just the manager.</p>
+<pre>
+# run this on each worker node
+echo &lt;PAT&gt; | docker login ghcr.io -u &lt;GITHUB_USER&gt; --password-stdin
+</pre>
+
+<h3>Problem — Database volume not accessible / data lost after service reschedule</h3>
+<p><strong>Root cause:</strong> The <code>pg_data</code> volume is a local volume on whichever node the db container happens to run on. If Swarm reschedules the db container to a different node (e.g. after a node failure), the new node has no <code>pg_data</code> volume — it starts fresh.</p>
+<p><strong>Fix:</strong> Pin the db service to the manager node with a placement constraint. That's why our swarm file has:</p>
+<pre>
+deploy:
+  placement:
+    constraints:
+      - node.role == manager   # db always runs on manager, volume is always there
+</pre>
+<p>For production, use a distributed storage solution (NFS, GlusterFS, or a cloud-managed database like RDS) instead of a local volume.</p>
+
+<h3>Problem — Overlay network: containers on different nodes can't communicate</h3>
+<p><strong>Root cause:</strong> Regular Docker bridge networks are per-host. Containers on node A and node B can't see each other on a bridge network. Overlay networks use VXLAN to tunnel traffic across nodes — but only work in Swarm mode.</p>
+<p><strong>Fix:</strong> Ensure networks in the stack file use <code>driver: overlay</code>. The <code>attachable: true</code> flag is needed if you want to run standalone containers (not services) on the overlay network for debugging.</p>
+<pre>
+networks:
+  frontend_net:
+    driver: overlay
+  backend_net:
+    driver: overlay
+</pre>
+
+<h3>Problem — docker stack deploy shows services running but app doesn't respond</h3>
+<p><strong>Root cause:</strong> <code>docker service ls</code> shows <code>1/1</code> replicas but the task may be in a crash loop. The service shows as running because Swarm counts the desired state, not necessarily the healthy state.</p>
+<p><strong>Fix:</strong> Check the actual task status.</p>
+<pre>
+docker service ps app_frontend              # shows task history including failed attempts
+docker service logs app_frontend            # aggregated logs from all replicas
+docker service inspect app_frontend --pretty
+</pre>
+
+<h3>Problem — Rollback goes to wrong version</h3>
+<p><strong>Root cause:</strong> Swarm only keeps the <em>previous</em> task spec — one version back. If you deploy twice, the first version is gone from Swarm's memory.</p>
+<p><strong>Fix:</strong> Tag images with git commit SHAs in addition to <code>:latest</code> so you can manually roll back to any version by updating the image reference.</p>
+<pre>
+# in CI/CD, tag with both latest and the commit SHA
+docker tag repo-backend:latest ghcr.io/user/repo-backend:$GITHUB_SHA
+docker push ghcr.io/user/repo-backend:$GITHUB_SHA
+
+# then to roll back to a specific commit:
+docker service update --image ghcr.io/user/repo-backend:abc1234 app_backend
+</pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<h2>15. ECS Deployment — Troubleshooting Log</h2>
+<div class="section">
+<p>Common issues when deploying or updating the ECS/Fargate stack.</p>
+
+<h3>VSCode — Terraform comments not colored</h3>
+<p><strong>Root cause:</strong> VSCode has no grammar tokens for <code>.tf</code> files without an extension. Comments appeared as plain white text.</p>
+<p><strong>Fix:</strong> Install the <strong>HashiCorp Terraform</strong> extension in VSCode. It adds syntax grammar for <code>.tf</code> files, enabling theme-based comment coloring.</p>
+
+<h3>ECS service not picking up new image after CI/CD push</h3>
+<p><strong>Root cause:</strong> ECS task definitions pin to a specific image tag (or <code>:latest</code>). Pushing a new image to GHCR does not automatically restart the service — ECS only pulls a new image when a task is replaced.</p>
+<p><strong>Fix:</strong> Force a new deployment. ECS stops the running tasks and starts new ones, which pull the latest image.</p>
+<pre>
+aws ecs update-service \
+  --cluster docker-compose-app-cluster \
+  --service docker-compose-app-backend \
+  --force-new-deployment
+</pre>
+
+<h3>How ECS knows what to run (common confusion)</h3>
+<p>ECS does not use any docker-compose file. The task definition (defined in Terraform as <code>aws_ecs_task_definition</code>) specifies the image, CPU, memory, and environment variables. The service (<code>aws_ecs_service</code>) says how many copies to run and on which cluster. <code>docker-compose.yml</code> is only used locally.</p>
+</div>
+
+</body>
+</html>

@@ -23,7 +23,7 @@ resource "aws_db_instance" "postgres" {
   vpc_security_group_ids = [aws_security_group.rds.id]
 
   skip_final_snapshot       = false
-  final_snapshot_identifier = "${var.project_name}-final-snapshot"
+  final_snapshot_identifier = "${var.project_name}-eks-final-snapshot"
   publicly_accessible       = false
 
   tags = { Name = "${var.project_name}-postgres" }
