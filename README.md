@@ -98,7 +98,9 @@ bash setup-eks.sh
 # get the frontend URL:
 kubectl get service frontend -n app
 
-# tear down:
+# tear down (run teardown script first — cleans up Kubernetes-managed AWS resources
+# like the ELB and its security group before Terraform removes the VPC):
+bash teardown-eks.sh
 cd terraform-eks && terraform destroy
 ```
 
