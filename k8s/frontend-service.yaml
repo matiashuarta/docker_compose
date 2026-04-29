@@ -1,0 +1,20 @@
+# frontend-service.yaml: exposes the frontend to the public internet
+#
+# LoadBalancer = tells AWS to provision a Classic Load Balancer with a public IP
+# equivalent to the public-facing ALB in the ECS setup
+#
+# after `kubectl apply`, run:
+#   kubectl get service frontend -n app
+# the EXTERNAL-IP column will show the public DNS name — open that in your browser
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: app
+spec:
+  selector:
+    app: frontend  # sends traffic to pods with label app=frontend
+  ports:
+    - port: 80
+      targetPort: 80
+  type: LoadBalancer  # AWS automatically creates a load balancer with a public DNS name

@@ -1,0 +1,35 @@
+# backend-hpa.yaml: HorizontalPodAutoscaler for the backend
+#
+# HPA watches the backend Deployment and adjusts replica count automatically
+# based on CPU usage — equivalent to aws_appautoscaling_policy in ECS
+#
+# prerequisite: metrics-server must be installed in the cluster
+#   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+#
+# how it works:
+#   - HPA checks CPU usage of all backend pods every 15 seconds
+#   - if average CPU across pods exceeds 70%, it adds more pods (up to maxReplicas)
+#   - if average CPU drops below 70%, it removes pods (down to minReplicas)
+#   - scale-up is fast (seconds), scale-down waits 5 minutes to avoid flapping
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-hpa
+  namespace: app
+spec:
+  # points to the Deployment to scale — same idea as resource_id in ECS appautoscaling
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+
+  minReplicas: 1  # never scale below 1 pod
+  maxReplicas: 5  # never scale above 5 pods
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70  # keep average CPU around 70% across all backend pods

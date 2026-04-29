@@ -10,3 +10,6 @@ venv/
 
 # Docker
 *.log
+
+# Claude Code memory
+.claude/

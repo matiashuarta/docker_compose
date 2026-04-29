@@ -1,0 +1,36 @@
+# backend-deployment.yaml: replaces aws_ecs_task_definition + aws_ecs_service for the backend
+#
+# Deployment = the blueprint + the "keep N copies running" logic in one resource
+# if a pod crashes, Kubernetes restarts it automatically — same as ECS desired_count
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: app
+spec:
+  replicas: 1  # equivalent to desired_count = 1 in ECS
+  strategy:
+    type: Recreate  # kills old pod before starting new one — avoids OOM on single t3.small node
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/matiashuarta/docker_compose-backend:latest
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              cpu: "250m"     # 0.25 vCPU — same as the ECS task definition
+              memory: "512Mi" # 512MB RAM — same as the ECS task definition
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret       # reads from k8s/secret.yaml
+                  key: database-url
